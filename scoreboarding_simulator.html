@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <title>Scoreboarding Simulator - Pro</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f7f6; padding: 20px; }
+        .container { max-width: 1200px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
+        
+        .input-area { background: #e9ecef; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        textarea { width: 100%; height: 80px; font-family: monospace; padding: 10px; margin-top: 10px; border: 1px solid #ced4da; }
+        
+        .controls { display: flex; align-items: center; gap: 15px; margin-bottom: 20px; padding: 15px; border-top: 2px solid #eee; }
+        button { padding: 10px 20px; font-weight: bold; cursor: pointer; border: none; border-radius: 5px; transition: 0.2s; }
+        .btn-step { background: #007bff; color: white; }
+        .btn-step:hover { background: #0056b3; }
+        .btn-load { background: #28a745; color: white; }
+        .btn-reset { background: #dc3545; color: white; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+
+        table { border-collapse: collapse; width: 100%; margin-bottom: 30px; }
+        th, td { border: 1px solid #dee2e6; padding: 12px; text-align: center; }
+        th { background: #343a40; color: white; font-size: 0.85rem; }
+        tr:nth-child(even) { background: #f8f9fa; }
+        .cycle-info { font-size: 1.5rem; font-weight: bold; color: #d9534f; margin-left: auto; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Scoreboarding Simülatörü</h2>
+
+    <div class="input-area">
+        <strong>Komutları Girin (Her satıra bir komut):</strong><br>
+        <textarea id="instrInput">LD F6, 34+, R2
+LD F2, 45+, R3
+MUL F0, F2, F4
+SUB F8, F6, F2
+DIV F10, F0, F6
+ADD F6, F8, F2</textarea>
+        <div style="margin-top:10px;">
+            <button class="btn-load" onclick="setupSimulation()">Sistemi Yükle ve Başlat</button>
+        </div>
+    </div>
+
+    <div class="controls">
+        <button class="btn-step" id="prevBtn" onclick="prevStep()">⬅ Geri</button>
+        <button class="btn-step" id="nextBtn" onclick="nextStep()">İleri ➡</button>
+        <button class="btn-reset" onclick="setupSimulation()">Sıfırla</button>
+        <div class="cycle-info">Clock Cycle: <span id="cycleNum">0</span></div>
+    </div>
+
+    <h3>Instruction Status</h3>
+    <table id="instTable">
+        <thead>
+            <tr><th>Instruction</th><th>Issue</th><th>Read Op</th><th>Exec Comp</th><th>Write Result</th></tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <h3>Functional Unit Status</h3>
+    <table id="fuTable">
+        <thead>
+            <tr><th>Name</th><th>Busy</th><th>Op</th><th>Fi</th><th>Fj</th><th>Fk</th><th>Qj</th><th>Qk</th><th>Rj</th><th>Rk</th></tr>
+        </thead>
+        <tbody></tbody>
+    </table>
+
+    <h3>Register Status</h3>
+    <table id="regTable">
+        <thead><tr id="regHeader"></tr><tr id="regValues"></tr></thead>
+    </table>
+</div>
+
+<script>
+    let history = [];
+    let currentCycle = 0;
+    let state = {};
+
+    function setupSimulation() {
+        const input = document.getElementById('instrInput').value.trim();
+        if (!input) return alert("Komut girmediniz!");
+
+        const instructions = input.split('\n').map(line => {
+            const clean = line.replace(/,/g, '').trim().split(/\s+/);
+            return { op: clean[0], dst: clean[1], src1: clean[2], src2: clean[3], 
+                     issue: null, read: null, exec: null, write: null };
+        });
+
+        currentCycle = 0;
+        state = {
+            instructions: instructions,
+            fus: [
+                { name: 'Integer', busy: 'No', op: '', fi: '', fj: '', fk: '', qj: '', qk: '', rj: '', rk: '', rem: 0 },
+                { name: 'Mult1', busy: 'No', op: '', fi: '', fj: '', fk: '', qj: '', qk: '', rj: '', rk: '', rem: 0 },
+                { name: 'Mult2', busy: 'No', op: '', fi: '', fj: '', fk: '', qj: '', qk: '', rj: '', rk: '', rem: 0 },
+                { name: 'Add', busy: 'No', op: '', fi: '', fj: '', fk: '', qj: '', qk: '', rj: '', rk: '', rem: 0 },
+                { name: 'Divide', busy: 'No', op: '', fi: '', fj: '', fk: '', qj: '', qk: '', rj: '', rk: '', rem: 0 }
+            ],
+            registers: {}
+        };
+
+        // F0-F10 arası ve R2, R3 hazırlığı
+        ['F0','F2','F4','F6','F8','F10','R2','R3'].forEach(r => state.registers[r] = '');
+
+        history = [JSON.parse(JSON.stringify(state))];
+        render();
+    }
+
+    function render() {
+        document.getElementById('cycleNum').innerText = currentCycle;
+        
+        // Instruction Table
+        document.querySelector('#instTable tbody').innerHTML = state.instructions.map(i => `
+            <tr>
+                <td>${i.op} ${i.dst}, ${i.src1}, ${i.src2}</td>
+                <td>${i.issue || ''}</td><td>${i.read || ''}</td>
+                <td>${i.exec || ''}</td><td>${i.write || ''}</td>
+            </tr>
+        `).join('');
+
+        // FU Table
+        document.querySelector('#fuTable tbody').innerHTML = state.fus.map(f => `
+            <tr>
+                <td>${f.name}</td><td>${f.busy}</td><td>${f.op}</td>
+                <td>${f.fi}</td><td>${f.fj}</td><td>${f.fk}</td>
+                <td>${f.qj}</td><td>${f.qk}</td><td>${f.rj}</td><td>${f.rk}</td>
+            </tr>
+        `).join('');
+
+        // Register Table
+        const regs = Object.keys(state.registers);
+        document.getElementById('regHeader').innerHTML = regs.map(r => `<th>${r}</th>`).join('');
+        document.getElementById('regValues').innerHTML = regs.map(r => `<td>${state.registers[r]}</td>`).join('');
+
+        document.getElementById('prevBtn').disabled = (currentCycle === 0);
+    }
+
+    function nextStep() {
+        currentCycle++;
+        if (history[currentCycle]) {
+            state = JSON.parse(JSON.stringify(history[currentCycle]));
+        } else {
+            runLogic();
+            history.push(JSON.parse(JSON.stringify(state)));
+        }
+        render();
+    }
+
+    function prevStep() {
+        if (currentCycle > 0) {
+            currentCycle--;
+            state = JSON.parse(JSON.stringify(history[currentCycle]));
+            render();
+        }
+    }
+
+    function runLogic() {
+        // --- 1. WRITE RESULT ---
+        state.instructions.forEach(inst => {
+            if (inst.exec && inst.exec < currentCycle && !inst.write) {
+                const fu = state.fus.find(f => f.fi === inst.dst && f.busy === 'Yes' && f.op === inst.op);
+                if (fu) {
+                    // WAR Check: Diğer FU'lar bu yazılacak yeri okuyor mu?
+                    const canWrite = state.fus.every(f => 
+                        (f.fj !== inst.dst || f.rj === 'No') && (f.fk !== inst.dst || f.rk === 'No')
+                    );
+                    if (canWrite) {
+                        inst.write = currentCycle;
+                        if (state.registers[inst.dst] === fu.name) state.registers[inst.dst] = '';
+                        Object.assign(fu, { busy: 'No', op: '', fi: '', fj: '', fk: '', qj: '', qk: '', rj: '', rk: '' });
+                    }
+                }
+            }
+        });
+
+        // --- 2. EXECUTION ---
+        state.fus.forEach(fu => {
+            if (fu.busy === 'Yes' && fu.rj === 'Yes' && fu.rk === 'Yes') {
+                const inst = state.instructions.find(i => i.issue && i.read && !i.exec && state.registers[i.dst] === fu.name);
+                if (inst && inst.read < currentCycle) {
+                    fu.rem--;
+                    if (fu.rem <= 0) inst.exec = currentCycle;
+                }
+            }
+        });
+
+        // --- 3. READ OPERANDS ---
+        state.instructions.forEach(inst => {
+            if (inst.issue && inst.issue < currentCycle && !inst.read) {
+                const fu = state.fus.find(f => f.fi === inst.dst && f.busy === 'Yes' && f.op === inst.op);
+                if (fu && fu.rj === 'Yes' && fu.rk === 'Yes') inst.read = currentCycle;
+            }
+        });
+
+        // --- 4. ISSUE ---
+        const nextToIssue = state.instructions.find(i => !i.issue);
+        if (nextToIssue) {
+            const type = getFUType(nextToIssue.op);
+            const fu = state.fus.find(f => f.name.startsWith(type) && f.busy === 'No');
+            // WAW Check
+            if (fu && !state.registers[nextToIssue.dst]) {
+                nextToIssue.issue = currentCycle;
+                Object.assign(fu, {
+                    busy: 'Yes', op: nextToIssue.op, fi: nextToIssue.dst, 
+                    fj: nextToIssue.src1, fk: nextToIssue.src2,
+                    rem: getLatency(nextToIssue.op),
+                    qj: state.registers[nextToIssue.src1] || '',
+                    rj: state.registers[nextToIssue.src1] ? 'No' : 'Yes',
+                    qk: state.registers[nextToIssue.src2] || '',
+                    rk: state.registers[nextToIssue.src2] ? 'No' : 'Yes'
+                });
+                state.registers[nextToIssue.dst] = fu.name;
+            }
+        }
+
+        // Forwarding / Result Update (Rj/Rk updates)
+        state.fus.forEach(fu => {
+            if (fu.busy === 'Yes') {
+                if (fu.qj && !state.registers[fu.fj]) { fu.rj = 'Yes'; fu.qj = ''; }
+                if (fu.qk && !state.registers[fu.fk]) { fu.rk = 'Yes'; fu.qk = ''; }
+            }
+        });
+    }
+
+    function getFUType(op) {
+        if (op === 'LD' || op === 'ST') return 'Integer';
+        if (op === 'MUL') return 'Mult';
+        if (op === 'ADD' || op === 'SUB') return 'Add';
+        if (op === 'DIV') return 'Divide';
+        return 'Integer';
+    }
+
+    function getLatency(op) {
+        if (op === 'MUL') return 10;
+        if (op === 'DIV') return 40;
+        if (op === 'LD' || op === 'ST') return 1;
+        return 2;
+    }
+
+    // İlk yükleme
+    setupSimulation();
+</script>
+</body>
+</html>
